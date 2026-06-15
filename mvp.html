@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RxVision AI OCR Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;background:#f6f9fc;color:#102033;margin:0}header{background:linear-gradient(135deg,#0b4f6c,#01a7c2);color:#fff;padding:24px 7%}main{padding:28px 7%;max-width:1180px;margin:auto}.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.card{background:#fff;border-radius:16px;padding:22px;box-shadow:0 8px 24px rgba(16,32,51,.08);border:1px solid #e9eef5}label{font-weight:700;display:block;margin-top:12px}input,textarea{width:100%;padding:11px;border:1px solid #cfd8e3;border-radius:8px;font-size:15px}textarea{min-height:150px}button{background:#0b4f6c;color:#fff;border:0;border-radius:9px;padding:12px 16px;font-weight:800;cursor:pointer;margin:8px 8px 8px 0}.secondary{background:#425466}.warning{background:#fff8e6;border-left:5px solid #f0b429;padding:15px;border-radius:10px;margin:12px 0}.ok{background:#e9fbf0;border-left:5px solid #21a35b}.preview{max-width:100%;border-radius:10px;margin-top:12px;border:1px solid #ddd}.field{margin-bottom:10px}.small{font-size:13px;color:#536471}.json{white-space:pre-wrap;background:#071520;color:#d8e4ef;padding:15px;border-radius:10px;overflow:auto}@media(max-width:850px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>RxVision AI — Real OCR + AI Extraction</h1><p>Prototype only. Every field must be verified by a pharmacist against the original prescription.</p><a style="color:white" href="/">Home</a></header>
+<main>
+<div class="warning"><strong>Safety:</strong> This tool does not approve, dispense, or clinically validate prescriptions. It only assists intake review.</div>
+<div class="grid">
+<section class="card">
+<h2>1. Upload Prescription</h2>
+<input type="file" id="imageInput" accept="image/*" />
+<img id="preview" class="preview" style="display:none" />
+<button onclick="runOCR()">Run OCR</button>
+<button class="secondary" onclick="cleanWithAI()">Clean with AI</button>
+<p id="status" class="small">Waiting for upload.</p>
+<label>Raw OCR Text</label>
+<textarea id="ocrText" placeholder="OCR output will appear here..."></textarea>
+</section>
+<section class="card">
+<h2>2. Pharmacist Review Fields</h2>
+<div class="field"><label>Patient Name</label><input id="patientName"></div>
+<div class="field"><label>DOB</label><input id="dob"></div>
+<div class="field"><label>Drug Name</label><input id="drugName"></div>
+<div class="field"><label>Strength</label><input id="strength"></div>
+<div class="field"><label>Quantity</label><input id="quantity"></div>
+<div class="field"><label>Refills</label><input id="refills"></div>
+<div class="field"><label>Directions</label><textarea id="directions"></textarea></div>
+<div class="field"><label>Prescriber</label><input id="prescriber"></div>
+<div class="field"><label>Prescription Date</label><input id="rxDate"></div>
+<button onclick="copyJSON()">Copy JSON</button>
+<button class="secondary" onclick="clearFields()">Clear</button>
+</section>
+</div>
+<section class="card" style="margin-top:22px">
+<h2>3. Export JSON</h2>
+<pre id="jsonOut" class="json">{}</pre>
+</section>
+</main>
+<script>
+const imageInput=document.getElementById('imageInput');
+const preview=document.getElementById('preview');
+imageInput.addEventListener('change',()=>{const f=imageInput.files[0]; if(!f)return; preview.src=URL.createObjectURL(f); preview.style.display='block';});
+function setStatus(t, ok=false){const el=document.getElementById('status'); el.textContent=t; el.className=ok?'small ok':'small';}
+async function runOCR(){const file=imageInput.files[0]; if(!file){alert('Upload an image first');return;} setStatus('Processing OCR...'); const result=await Tesseract.recognize(file,'eng',{logger:m=>{if(m.status) setStatus(m.status+' '+Math.round((m.progress||0)*100)+'%');}}); const text=result.data.text||''; document.getElementById('ocrText').value=text; quickLocalExtract(text); setStatus('OCR complete. Now click Clean with AI for better extraction.', true);}
+function val(id,v){document.getElementById(id).value=v||'';}
+function quickLocalExtract(text){clearFields(false); const t=text.replace(/\s+/g,' ').trim(); const qty=t.match(/(?:qty|quantity|dispense|#)\s*[:#-]?\s*(\d+)/i); if(qty) val('quantity',qty[1]); const strength=t.match(/(\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|units?))/i); if(strength) val('strength',strength[1]); const date=t.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})/); if(date) val('rxDate',date[1]); updateJSON();}
+async function cleanWithAI(){const text=document.getElementById('ocrText').value.trim(); if(!text){alert('Run OCR first or paste OCR text.');return;} setStatus('Sending OCR text to secure AI extraction...'); try{const res=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ocrText:text})}); const data=await res.json(); if(!res.ok){throw new Error(data.error||'AI extraction failed');} const e=data.extraction||data; val('patientName',e.patient_name); val('dob',e.dob); val('drugName',e.drug_name); val('strength',e.strength); val('quantity',e.quantity); val('refills',e.refills); val('directions',e.directions); val('prescriber',e.prescriber); val('rxDate',e.prescription_date); updateJSON(e.confidence_flags||e.confidence_notes||[]); setStatus('AI extraction complete. Pharmacist review still required.', true);}catch(err){setStatus('AI extraction error: '+err.message); alert(err.message);} }
+function buildJSON(flags=[]){return {patient:{name:document.getElementById('patientName').value||null,dob:document.getElementById('dob').value||null},medication:{drugName:document.getElementById('drugName').value||null,strength:document.getElementById('strength').value||null,quantity:document.getElementById('quantity').value||null,refills:document.getElementById('refills').value||null,directions:document.getElementById('directions').value||null},prescriber:document.getElementById('prescriber').value||null,prescriptionDate:document.getElementById('rxDate').value||null,confidenceFlags:flags,verificationStatus:'requires_pharmacist_review',safetyNote:'Prototype only. Verify every field against the original prescription before use.'};}
+function updateJSON(flags=[]){document.getElementById('jsonOut').textContent=JSON.stringify(buildJSON(flags),null,2);} document.querySelectorAll('input,textarea').forEach(el=>el.addEventListener('input',()=>updateJSON()));
+async function copyJSON(){updateJSON(); await navigator.clipboard.writeText(document.getElementById('jsonOut').textContent); alert('JSON copied');}
+function clearFields(update=true){['patientName','dob','drugName','strength','quantity','refills','directions','prescriber','rxDate'].forEach(id=>val(id,'')); if(update) updateJSON();}
+</script>
+</body>
+</html>
